@@ -606,7 +606,7 @@ def test_migration_009_applies_to_an_older_database_and_backfills_the_template(t
         core.seed(old)                          # seeded before reports existed
     finally:
         core.MIGRATIONS_DIR = real
-    assert core.migrate(old) == ["009_reports.sql"]
+    assert core.migrate(old) == ["009_reports.sql", "010_real_delivery.sql"]
     s = Store(old)
     assert rows(s, "SELECT COUNT(*) AS n FROM report_items")[0]["n"] == 6        # template family got its reports
     assert core.migrate(old) == []

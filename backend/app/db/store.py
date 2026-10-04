@@ -544,19 +544,55 @@ class Store:
 
     def add_outbox(self, member_id: str, channel: str, to_address: str, subject: str | None,
                    body: str) -> dict[str, Any]:
-        """Write one delivery PREVIEW row. The status is always 'preview' (a database CHECK enforces
-        it); nothing is ever sent. Called by notifier.PreviewNotifier only."""
+        """Back-compat: a preview row. New callers should use record_outbox with an explicit status."""
+        return self.record_outbox(member_id, channel, to_address, subject, body, status="preview")
+
+    def record_outbox(self, member_id: str, channel: str, to_address: str, subject: str | None,
+                      body: str, *, status: str = "preview", provider_message_id: str | None = None,
+                      error: str | None = None) -> dict[str, Any]:
+        """Write one delivery row recording the outcome of a send (or a 'preview' when nothing was
+        sent). Notifiers call this; the status is validated by a database CHECK."""
         with session(self.path) as conn:
             cur = conn.execute(
-                "INSERT INTO outbox (member_id, channel, to_address, subject, body, created_at, status) "
-                "VALUES (?,?,?,?,?,?, 'preview')", (member_id, channel, to_address, subject, body, _now_iso()))
+                "INSERT INTO outbox (member_id, channel, to_address, subject, body, created_at, "
+                "status, provider_message_id, error) VALUES (?,?,?,?,?,?,?,?,?)",
+                (member_id, channel, to_address, subject, body, _now_iso(), status,
+                 provider_message_id, error))
             return dict(conn.execute("SELECT * FROM outbox WHERE id = ?", (cur.lastrowid,)).fetchone())
 
     def list_outbox(self, viewer_id: str, member_id: str) -> list[dict[str, Any]]:
-        """Delivery previews for one person, newest first."""
+        """Delivery log for one person, newest first (statuses: preview, queued, sent, failed)."""
         with session(self.path) as conn:
             self._target(conn, viewer_id, member_id)
             rows = conn.execute("SELECT * FROM outbox WHERE member_id = ? ORDER BY created_at DESC, id DESC",
+                                (member_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---- web-push subscriptions (migration 010) ----------------------------------------------
+    def add_push_subscription(self, viewer_id: str, member_id: str, endpoint: str,
+                              p256dh: str, auth: str) -> dict[str, Any]:
+        """Save (or refresh) one browser's push subscription for a member the viewer may edit."""
+        with session(self.path) as conn:
+            self._editable_target(conn, viewer_id, member_id)
+            conn.execute(
+                "INSERT INTO push_subscriptions (member_id, endpoint, p256dh, auth, created_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET "
+                "member_id = excluded.member_id, p256dh = excluded.p256dh, auth = excluded.auth",
+                (member_id, endpoint, p256dh, auth, _now_iso()))
+            row = conn.execute("SELECT * FROM push_subscriptions WHERE endpoint = ?", (endpoint,)).fetchone()
+            return dict(row)
+
+    def remove_push_subscription(self, viewer_id: str, member_id: str, endpoint: str) -> int:
+        """Delete one subscription (used on unsubscribe or when the push service reports it gone)."""
+        with session(self.path) as conn:
+            self._editable_target(conn, viewer_id, member_id)
+            return conn.execute("DELETE FROM push_subscriptions WHERE member_id = ? AND endpoint = ?",
+                                (member_id, endpoint)).rowcount
+
+    def list_push_subscriptions(self, member_id: str) -> list[dict[str, Any]]:
+        """Every push subscription for a member (used by delivery; no viewer check needed here)."""
+        with session(self.path) as conn:
+            rows = conn.execute("SELECT * FROM push_subscriptions WHERE member_id = ?",
                                 (member_id,)).fetchall()
         return [dict(r) for r in rows]
 

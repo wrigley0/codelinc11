@@ -25,11 +25,13 @@ from ..models import (
     NotificationPrefs,
     NotificationPrefsUpdate,
     OutboxMessage,
+    PushConfig,
+    PushSubscriptionRequest,
     TestNotificationRequest,
     TestNotificationResponse,
 )
 from ..notifications import KINDS, sync_notifications
-from ..notifier import OutboundMessage, get_notifier
+from ..notifier import OutboundMessage, get_notifier, push_public_key
 from .profiles import EMAIL_RE
 from .session import StoreDep, Viewer, guarded
 
@@ -129,5 +131,30 @@ def put_prefs(member_id: str, req: NotificationPrefsUpdate, viewer: Viewer,
 
 @router.get("/members/{member_id}/outbox", response_model=list[OutboxMessage])
 def list_outbox(member_id: str, viewer: Viewer, store: StoreDep) -> list[OutboxMessage]:
-    """Delivery previews, newest first. Every row has status "preview": nothing is ever sent."""
+    """Delivery log, newest first. Status is preview (nothing sent) or sent/failed when a real
+    email or web-push provider is configured."""
     return [OutboxMessage(**r) for r in guarded(lambda: store.list_outbox(viewer, member_id))]
+
+
+# ---- web push ---------------------------------------------------------------------------------
+
+@router.get("/notifications/push-config", response_model=PushConfig)
+def get_push_config() -> PushConfig:
+    """The VAPID public key the browser needs to subscribe, or enabled=false when push is off."""
+    key = push_public_key()
+    return PushConfig(enabled=key is not None, public_key=key)
+
+
+@router.post("/members/{member_id}/push-subscriptions", status_code=204)
+def subscribe_push(member_id: str, sub: PushSubscriptionRequest, viewer: Viewer,
+                   store: StoreDep) -> None:
+    """Save this browser's web-push subscription for the member (demo family only)."""
+    guarded(lambda: store.add_push_subscription(
+        viewer, member_id, sub.endpoint, sub.keys.p256dh, sub.keys.auth))
+
+
+@router.delete("/members/{member_id}/push-subscriptions", status_code=204)
+def unsubscribe_push(member_id: str, sub: PushSubscriptionRequest, viewer: Viewer,
+                     store: StoreDep) -> None:
+    """Remove this browser's subscription (on opt-out)."""
+    guarded(lambda: store.remove_push_subscription(viewer, member_id, sub.endpoint))

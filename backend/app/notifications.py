@@ -13,6 +13,7 @@ disclaimer wherever an amount appears.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date
 from typing import Any
@@ -165,10 +166,15 @@ def sync_notifications(store: Store, viewer: str, member_id: str) -> list[dict[s
         wanted = [n for n in wanted if n["kind"] in prefs["types"]]
     created = store.add_notifications(viewer, member_id, wanted)
     notifier = get_notifier(store)
+    push_subs = store.list_push_subscriptions(member_id) if prefs["app"] else []
     for n in created:
         text = f"{n['title']}. {n['body']}"
         if prefs["email"] and member.get("email"):
             notifier.deliver(OutboundMessage(member_id, "email", member["email"], n["title"], text))
-        if prefs["sms"] and member.get("phone"):
-            notifier.deliver(OutboundMessage(member_id, "sms", member["phone"], None, text[:320]))
+        # Web push goes to every browser the person turned notifications on in. The whole
+        # subscription (endpoint + keys) travels in to_address so the push notifier can use it.
+        for sub in push_subs:
+            payload = json.dumps({"endpoint": sub["endpoint"],
+                                  "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}})
+            notifier.deliver(OutboundMessage(member_id, "push", payload, n["title"], text[:320]))
     return created

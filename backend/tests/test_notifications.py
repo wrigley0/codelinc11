@@ -365,18 +365,18 @@ def test_no_previews_when_email_and_sms_are_off(client, store):
 
 def test_previews_written_only_when_enabled_and_never_sent(client, store):
     _hid, ids, heads = family(client)
+    # Email on; SMS is no longer a delivery channel, so turning it on changes nothing.
     client.put(f"/members/{ids['alex']}/notification-prefs", headers=heads["alex"],
                json={"app": True, "email": True, "sms": True})
     body = get_list(client, ids["alex"], heads["alex"])
     out = client.get(f"/members/{ids['alex']}/outbox", headers=heads["alex"]).json()
-    assert len(out) == 2 * len(body["notifications"])
-    assert {m["status"] for m in out} == {"preview"}
+    # With no push subscription, there is exactly one email preview per notification and no SMS.
+    assert len(out) == len(body["notifications"])
+    assert {m["status"] for m in out} == {"preview"}   # default notifier sends nothing
     emails = [m for m in out if m["channel"] == "email"]
-    texts = [m for m in out if m["channel"] == "sms"]
+    assert not [m for m in out if m["channel"] == "sms"]
     assert {m["to_address"] for m in emails} == {"ac.halog@example.test"}
-    assert {m["to_address"] for m in texts} == {"3345550143"}
-    assert all(m["subject"] for m in emails) and all(m["subject"] is None for m in texts)
-    assert all(len(m["body"]) <= 320 for m in texts)
+    assert all(m["subject"] for m in emails)
     titles = {n["title"] for n in body["notifications"]}
     assert {m["subject"] for m in emails} == titles
     # Reading again creates no new previews (only new notifications do).
@@ -393,12 +393,17 @@ def test_only_the_enabled_channel_gets_previews(client):
     assert out and {m["channel"] for m in out} == {"email"}
 
 
-def test_outbox_status_is_locked_to_preview_by_the_database(client, store):
+def test_outbox_status_allows_real_delivery_states_but_rejects_unknown(client, store):
     _hid, ids, _heads = family(client)
-    with connect(store.path) as c, pytest.raises(sqlite3.IntegrityError):
-        c.execute("INSERT INTO outbox (member_id, channel, to_address, body, created_at, status) "
-                  "VALUES (?, 'email', 'a@example.test', 'x', '2026-11-01T00:00:00+00:00', 'sent')",
-                  (ids["alex"],))
+    with connect(store.path) as c:
+        for status in ("preview", "queued", "sent", "failed"):
+            c.execute("INSERT INTO outbox (member_id, channel, to_address, body, created_at, status) "
+                      "VALUES (?, 'email', 'a@example.test', 'x', '2026-11-01T00:00:00+00:00', ?)",
+                      (ids["alex"], status))
+        with pytest.raises(sqlite3.IntegrityError):
+            c.execute("INSERT INTO outbox (member_id, channel, to_address, body, created_at, status) "
+                      "VALUES (?, 'email', 'a@example.test', 'x', '2026-11-01T00:00:00+00:00', 'bogus')",
+                      (ids["alex"],))
 
 
 def test_notifier_default_is_the_preview_notifier(store):
@@ -598,10 +603,10 @@ def test_migration_006_applies_to_an_older_database(tmp_path):
     finally:
         core.MIGRATIONS_DIR = real
     assert core.migrate(path) == ["006_notifications.sql", "007_notification_reminder_kind.sql",
-                                  "008_providers.sql", "009_reports.sql"]
+                                  "008_providers.sql", "009_reports.sql", "010_real_delivery.sql"]
     with connect(path) as c:
         names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert {"notification_prefs", "notifications", "outbox"} <= names
+        assert {"notification_prefs", "notifications", "outbox", "push_subscriptions"} <= names
 
 
 def test_unique_member_and_dedupe_key(store):

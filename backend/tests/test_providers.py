@@ -346,7 +346,7 @@ def test_reseed_and_older_database_get_the_directory(tmp_path):
         core.seed(old)
     finally:
         core.MIGRATIONS_DIR = real
-    assert core.migrate(old) == ["008_providers.sql", "009_reports.sql"]
+    assert core.migrate(old) == ["008_providers.sql", "009_reports.sql", "010_real_delivery.sql"]
     assert rows(Store(old), "SELECT COUNT(*) AS n FROM providers")[0]["n"] == n
     assert core.migrate(old) == []
     assert rows(Store(old), "SELECT COUNT(*) AS n FROM providers")[0]["n"] == n   # not duplicated

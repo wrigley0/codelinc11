@@ -644,12 +644,14 @@ class TestNotificationRequest(BaseModel):
 class OutboxMessage(BaseModel):
     id: int
     member_id: str
-    channel: Literal["email", "sms"]
+    channel: Literal["email", "sms", "push"]
     to_address: str                                     # the stored contact (shown only to people who may see this member)
     subject: str | None = None
     body: str
     created_at: str
-    status: Literal["preview"] = "preview"              # always "preview": nothing is ever sent
+    status: Literal["preview", "queued", "sent", "failed"] = "preview"
+    provider_message_id: str | None = None
+    error: str | None = None
 
 
 class TestNotificationResponse(BaseModel):
@@ -657,6 +659,25 @@ class TestNotificationResponse(BaseModel):
     channel: Literal["app", "email", "sms"]
     notification: Notification | None = None           # for channel "app"
     outbox: OutboxMessage | None = None                 # for "email" and "sms" (a preview, not sent)
+
+
+# ---------- Web push subscriptions (migration 010) ----------
+
+class PushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscriptionRequest(BaseModel):
+    """A browser PushSubscription, as returned by the Push API in the frontend."""
+    endpoint: str
+    keys: PushKeys
+
+
+class PushConfig(BaseModel):
+    """What the frontend needs to subscribe. enabled is false when web push isn't configured."""
+    enabled: bool
+    public_key: str | None = None
 
 
 # ---------- Providers (sprint 2, B3) ----------
